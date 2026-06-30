@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # git-up — pull develop (or master) across all git repos in cwd
-# Usage: git up [--back]
+# Usage: git up [--back] [--exclude=<pattern>[,<pattern>...]]
 
 set -euo pipefail
 
@@ -21,13 +21,17 @@ header()  { printf "\n${BOLD}━━ %s ${DIM}%s${RESET}\n" "$1" "$2"; }
 skip()    { printf "  ${DIM}–  %s${RESET}\n" "$*"; }
 
 BACK=false
+EXCLUDE_PATTERNS=()
 for arg in "$@"; do
   case "$arg" in
     --back) BACK=true ;;
+    --exclude=*)
+      IFS=',' read -ra EXCLUDE_PATTERNS <<< "${arg#--exclude=}" ;;
     --help|-h)
-      printf "Usage: git up [--back]\n"
+      printf "Usage: git up [--back] [--exclude=<pattern>[,<pattern>...]]\n"
       printf "  Pulls develop (or master) in every git repo under cwd.\n"
-      printf "  --back   Return to original branch after pulling.\n"
+      printf "  --back              Return to original branch after pulling.\n"
+      printf "  --exclude=<patterns>  Comma-separated glob patterns of folders to skip.\n"
       exit 0 ;;
     *) printf "Unknown argument: %s\n" "$arg" >&2; exit 1 ;;
   esac
@@ -50,6 +54,14 @@ _restore_stash() {
     git -C "$repo" stash pop --quiet 2>/dev/null \
       || warn "Stash pop failed — stash preserved as '${stash_name}'"
   fi
+}
+
+_is_excluded() {
+  local repo="$1" pattern
+  for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    [[ "$repo" == $pattern ]] && return 0
+  done
+  return 1
 }
 
 _checkout_target() {
@@ -77,6 +89,12 @@ _checkout_target() {
 for repo_path in */; do
   repo="${repo_path%/}"
   [[ -d "$repo" ]] || continue
+
+  if _is_excluded "$repo"; then
+    skip "${repo} — excluded"
+    (( COUNT_SKIP++ )) || true
+    continue
+  fi
 
   if [[ ! -d "$repo/.git" ]]; then
     header "$repo" "(not a git repo)"

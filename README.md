@@ -23,12 +23,19 @@ $ git up
 ## Usage
 
 ```
-git up [--back]
+git up [--back] [--exclude=<pattern>[,<pattern>...]]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--back` | Return to the original branch after pulling |
+| `--exclude=<patterns>` | Comma-separated glob patterns of folder names to skip |
+
+Patterns are matched against the folder name (not the full path) using standard glob syntax (`*`, `?`).
+
+```bash
+git up --exclude=legacy,scratch-*,experimental-?
+```
 
 Run from any directory that contains git repos as immediate subdirectories.
 
