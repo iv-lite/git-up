@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# git-up — pull develop (or master) across all git repos in cwd
+# Usage: git up [--back]
+
+set -euo pipefail
+
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
+
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+RED=$'\033[0;31m'
+CYAN=$'\033[0;36m'
+
+info()    { printf "  ${CYAN}→${RESET}  %s\n" "$*"; }
+success() { printf "  ${GREEN}✓${RESET}  %s\n" "$*"; }
+warn()    { printf "  ${YELLOW}⚠${RESET}  %s\n" "$*"; }
+error()   { printf "  ${RED}✗${RESET}  %s\n" "$*" >&2; }
+header()  { printf "\n${BOLD}━━ %s ${DIM}%s${RESET}\n" "$1" "$2"; }
+skip()    { printf "  ${DIM}–  %s${RESET}\n" "$*"; }
+
+BACK=false
+for arg in "$@"; do
+  case "$arg" in
+    --back) BACK=true ;;
+    --help|-h)
+      printf "Usage: git up [--back]\n"
+      printf "  Pulls develop (or master) in every git repo under cwd.\n"
+      printf "  --back   Return to original branch after pulling.\n"
+      exit 0 ;;
+    *) printf "Unknown argument: %s\n" "$arg" >&2; exit 1 ;;
+  esac
+done
+
+COUNT_OK=0
+COUNT_SKIP=0
+COUNT_ERR=0
+TIMESTAMP=$(date '+%Y-%m-%d-%H:%M:%S')
+
+_has_branch() {
+  local repo="$1" branch="$2"
+  git -C "$repo" rev-parse --verify "$branch" &>/dev/null \
+    || git -C "$repo" rev-parse --verify "origin/$branch" &>/dev/null
+}
+
+_restore_stash() {
+  local repo="$1" stashed="$2" stash_name="$3"
+  if [[ "$stashed" == "true" ]]; then
+    git -C "$repo" stash pop --quiet 2>/dev/null \
+      || warn "Stash pop failed — stash preserved as '${stash_name}'"
+  fi
+}
+
+_checkout_target() {
+  local repo="$1" target="$2" stashed="$3" stash_name="$4"
+
+  if git -C "$repo" checkout "$target" --quiet 2>/dev/null; then
+    return 0
+  fi
+
+  if git -C "$repo" rev-parse --verify "origin/$target" &>/dev/null \
+      && ! git -C "$repo" rev-parse --verify "$target" &>/dev/null; then
+    if git -C "$repo" checkout -b "$target" --track "origin/$target" --quiet; then
+      return 0
+    fi
+    error "Failed to create tracking branch for ${target}"
+    _restore_stash "$repo" "$stashed" "$stash_name"
+    return 1
+  fi
+
+  error "Failed to checkout ${target}"
+  _restore_stash "$repo" "$stashed" "$stash_name"
+  return 1
+}
+
+for repo_path in */; do
+  repo="${repo_path%/}"
+  [[ -d "$repo" ]] || continue
+
+  if [[ ! -d "$repo/.git" ]]; then
+    header "$repo" "(not a git repo)"
+    skip "No .git directory — skipping"
+    (( COUNT_SKIP++ )) || true
+    continue
+  fi
+
+  TARGET=""
+  if _has_branch "$repo" develop; then
+    TARGET="develop"
+  elif _has_branch "$repo" master; then
+    TARGET="master"
+  fi
+
+  if [[ -z "$TARGET" ]]; then
+    header "$repo" "(no develop or master)"
+    skip "No develop or master branch — skipping"
+    (( COUNT_SKIP++ )) || true
+    continue
+  fi
+
+  ORIG_BRANCH=""
+  IS_DETACHED=false
+  if ORIG_BRANCH=$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null); then
+    IS_DETACHED=false
+  else
+    ORIG_BRANCH=$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo "unknown")
+    IS_DETACHED=true
+  fi
+
+  header "$repo" "(on ${ORIG_BRANCH} → pulling ${TARGET})"
+
+  for marker in MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    if [[ -f "$repo/.git/$marker" ]]; then
+      error "In-progress $marker — skipping"
+      (( COUNT_ERR++ )) || true
+      continue 2
+    fi
+  done
+
+  STASHED=false
+  STASH_NAME="git-up-${TIMESTAMP}"
+  if [[ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]]; then
+    info "Working tree dirty — stashing as '${STASH_NAME}'"
+    if git -C "$repo" stash push -u --message "$STASH_NAME" --quiet; then
+      success "Stashed"
+      STASHED=true
+    else
+      error "Stash failed — skipping"
+      (( COUNT_ERR++ )) || true
+      continue
+    fi
+  fi
+
+  if [[ "$ORIG_BRANCH" != "$TARGET" ]] || $IS_DETACHED; then
+    info "Checking out ${TARGET}"
+    if ! _checkout_target "$repo" "$TARGET" "$STASHED" "$STASH_NAME"; then
+      (( COUNT_ERR++ )) || true
+      continue
+    fi
+    success "Checked out ${TARGET}"
+  else
+    info "Already on ${TARGET}"
+  fi
+
+  info "Pulling origin/${TARGET}"
+  PULL_OUT=$(git -C "$repo" pull origin "$TARGET" 2>&1)
+  PULL_EXIT=$?
+
+  if [[ $PULL_EXIT -ne 0 ]]; then
+    error "Pull failed"
+    printf "%s\n" "$PULL_OUT" | sed 's/^/       /' >&2
+    (( COUNT_ERR++ )) || true
+    continue
+  fi
+
+  if echo "$PULL_OUT" | grep -q "Already up to date"; then
+    success "Already up to date"
+  else
+    success "Pulled latest ${TARGET}"
+    echo "$PULL_OUT" | grep -E "file(s)? changed|insertion|deletion" | sed 's/^/       /' || true
+  fi
+
+  if $BACK; then
+    if $IS_DETACHED; then
+      warn "Was in detached HEAD — cannot auto-return"
+      warn "To return: git -C $repo checkout $ORIG_BRANCH"
+    elif [[ "$ORIG_BRANCH" != "$TARGET" ]]; then
+      info "Returning to ${ORIG_BRANCH}"
+      if git -C "$repo" checkout "$ORIG_BRANCH" --quiet; then
+        success "Back on ${ORIG_BRANCH}"
+      else
+        error "Failed to return to ${ORIG_BRANCH}"
+        (( COUNT_ERR++ )) || true
+        continue
+      fi
+    fi
+  fi
+
+  if $STASHED; then
+    info "Restoring stash"
+    if git -C "$repo" stash pop --quiet; then
+      success "Stash restored"
+    else
+      warn "Stash pop had conflicts — stash preserved as '${STASH_NAME}'"
+    fi
+  fi
+
+  (( COUNT_OK++ )) || true
+done
+
+printf "\n${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
+printf "  ${GREEN}%d updated${RESET}  ${DIM}%d skipped${RESET}  " "$COUNT_OK" "$COUNT_SKIP"
+if [[ $COUNT_ERR -gt 0 ]]; then
+  printf "${RED}%d errors${RESET}\n" "$COUNT_ERR"
+else
+  printf "${GREEN}0 errors${RESET}\n"
+fi
+printf "\n"
