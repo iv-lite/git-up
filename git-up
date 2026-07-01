@@ -58,6 +58,7 @@ _restore_stash() {
 
 _is_excluded() {
   local repo="$1" pattern
+  [[ ${#EXCLUDE_PATTERNS[@]} -eq 0 ]] && return 1
   for pattern in "${EXCLUDE_PATTERNS[@]}"; do
     [[ "$repo" == $pattern ]] && return 0
   done
