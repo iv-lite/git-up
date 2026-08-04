@@ -67,9 +67,22 @@ To uninstall:
 
 ## Manual install
 
-Copy the script anywhere on your `$PATH` and make it executable:
+`git-up` is split into the entry script plus a `lib/` directory of helpers it
+sources at runtime. Copy both, preserving their relative layout — either as
+siblings:
 
 ```bash
 cp git-up ~/.local/bin/git-up
+cp -r lib ~/.local/bin/lib
+chmod +x ~/.local/bin/git-up
+```
+
+or with `lib/` installed under the matching `lib/git-up` next to your `bin`
+directory (the layout `install.sh` uses):
+
+```bash
+cp git-up ~/.local/bin/git-up
+mkdir -p ~/.local/lib/git-up
+cp lib/*.sh ~/.local/lib/git-up/
 chmod +x ~/.local/bin/git-up
 ```

@@ -3,9 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_SRC="$SCRIPT_DIR/git-up"
+LIB_SRC="$SCRIPT_DIR/lib"
 
 if [[ ! -f "$SCRIPT_SRC" ]]; then
   printf "Error: git-up script not found at %s\n" "$SCRIPT_SRC" >&2
+  exit 1
+fi
+
+if [[ ! -d "$LIB_SRC" ]]; then
+  printf "Error: git-up lib directory not found at %s\n" "$LIB_SRC" >&2
   exit 1
 fi
 
@@ -19,13 +25,18 @@ else
 fi
 
 DEST="$INSTALL_DIR/git-up"
+LIB_DEST="$(dirname "$INSTALL_DIR")/lib/git-up"
 
 if [[ "$INSTALL_DIR" == "/usr/local/bin" ]]; then
   printf "Installing to %s (requires sudo)...\n" "$DEST"
+  sudo mkdir -p "$LIB_DEST"
+  sudo cp "$LIB_SRC"/*.sh "$LIB_DEST/"
   sudo cp "$SCRIPT_SRC" "$DEST"
   sudo chmod +x "$DEST"
 else
   printf "Installing to %s...\n" "$DEST"
+  mkdir -p "$LIB_DEST"
+  cp "$LIB_SRC"/*.sh "$LIB_DEST/"
   cp "$SCRIPT_SRC" "$DEST"
   chmod +x "$DEST"
 fi
